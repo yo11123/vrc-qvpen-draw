@@ -21,26 +21,31 @@ html,body{
   background:#16213e;display:flex;align-items:center;
   padding:0 10px;gap:8px;z-index:20;
   box-shadow:0 2px 8px rgba(0,0,0,.4);
+  overflow-x:auto;overflow-y:hidden;
 }
 .toolbar button{
   background:#0f3460;color:#e0e0e0;border:none;
   padding:6px 14px;border-radius:8px;font-size:13px;
   cursor:pointer;min-height:36px;white-space:nowrap;
-  transition:background .15s;
+  transition:background .15s;flex-shrink:0;
 }
 .toolbar button:active{background:#533483}
 .toolbar button.active{background:#e94560}
-.toolbar .sep{width:1px;height:28px;background:#334}
-.slider-group{display:flex;align-items:center;gap:4px}
+.toolbar .sep{width:1px;min-width:1px;height:28px;background:#334;flex-shrink:0}
+.slider-group{display:flex;align-items:center;gap:4px;flex-shrink:0}
 .slider-group label{font-size:12px;white-space:nowrap}
-.slider-group input[type=range]{width:80px;accent-color:#e94560}
+.slider-group input[type=range]{width:70px;accent-color:#e94560}
 .slider-group .val{font-size:12px;min-width:22px;text-align:center}
 
-/* ===== Canvas ===== */
-#canvas{
-  position:fixed;top:56px;left:0;
-  background:#ffffff;cursor:crosshair;
+/* ===== Canvas layers ===== */
+.canvas-container{
+  position:fixed;top:56px;left:0;right:0;bottom:0;
 }
+#refCanvas,#canvas{
+  position:absolute;top:0;left:0;width:100%;height:100%;
+}
+#refCanvas{z-index:1;pointer-events:none}
+#canvas{z-index:2;background:transparent;cursor:crosshair}
 #canvas.eraser-mode{cursor:pointer}
 
 /* ===== Info bar ===== */
@@ -68,6 +73,9 @@ html,body{
 }
 .modal button.primary{background:#e94560}
 .modal button:active{opacity:.8}
+
+/* hidden file input */
+#refFileInput{display:none}
 </style>
 </head>
 <body>
@@ -90,11 +98,25 @@ html,body{
   <button id="eraserBtn">消しゴム</button>
   <button id="clearBtn">全消去</button>
   <div class="sep"></div>
+  <button id="refBtn" style="background:#7b2d8e">下絵</button>
+  <div class="slider-group">
+    <label>透過:</label>
+    <input type="range" id="refOpacity" min="0" max="100" value="30">
+    <span class="val" id="refOpacityVal">30%</span>
+  </div>
+  <button id="refClearBtn">下絵消去</button>
+  <div class="sep"></div>
   <button id="exportBtn" style="background:#0a7e3f">保存</button>
 </div>
 
-<!-- Canvas -->
-<canvas id="canvas"></canvas>
+<!-- Canvas layers -->
+<div class="canvas-container">
+  <canvas id="refCanvas"></canvas>
+  <canvas id="canvas"></canvas>
+</div>
+
+<!-- Hidden file input for reference image -->
+<input type="file" id="refFileInput" accept="image/*">
 
 <!-- Info -->
 <div class="info">
@@ -120,26 +142,43 @@ html,body{
 
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
+const refCanvas = document.getElementById('refCanvas');
+const refCtx = refCanvas.getContext('2d');
 
 // --- State ---
-let strokes = [];          // Array of {points:[{x,y,t}], width}
-let currentStroke = null;   // While drawing
+let strokes = [];
+let currentStroke = null;
 let isDrawing = false;
 let eraserMode = false;
 
 // Smoothing state
 let smoothX = 0, smoothY = 0;
 
+// Reference image state
+let refImage = null;  // loaded Image object
+let refOpacityValue = 0.3;
+
 // --- Resize ---
 function resize() {
   const dpr = window.devicePixelRatio || 1;
   const w = window.innerWidth;
   const h = window.innerHeight - 56;
+
+  // Drawing canvas
   canvas.style.width = w + 'px';
   canvas.style.height = h + 'px';
   canvas.width = w * dpr;
   canvas.height = h * dpr;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  // Reference canvas
+  refCanvas.style.width = w + 'px';
+  refCanvas.style.height = h + 'px';
+  refCanvas.width = w * dpr;
+  refCanvas.height = h * dpr;
+  refCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  drawRefImage();
   redraw();
 }
 window.addEventListener('resize', resize);
@@ -156,6 +195,75 @@ widthSlider.addEventListener('input', () => { widthVal.textContent = widthSlider
 
 function getSmoothFactor() { return parseInt(smoothSlider.value); }
 function getLineWidth() { return parseInt(widthSlider.value); }
+
+// --- Reference image ---
+const refOpacitySlider = document.getElementById('refOpacity');
+const refOpacityVal = document.getElementById('refOpacityVal');
+const refFileInput = document.getElementById('refFileInput');
+
+refOpacitySlider.addEventListener('input', () => {
+  refOpacityValue = parseInt(refOpacitySlider.value) / 100;
+  refOpacityVal.textContent = refOpacitySlider.value + '%';
+  drawRefImage();
+});
+
+document.getElementById('refBtn').addEventListener('click', () => {
+  refFileInput.click();
+});
+
+refFileInput.addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (ev) => {
+    const img = new Image();
+    img.onload = () => {
+      refImage = img;
+      drawRefImage();
+    };
+    img.src = ev.target.result;
+  };
+  reader.readAsDataURL(file);
+  // reset so same file can be re-selected
+  refFileInput.value = '';
+});
+
+document.getElementById('refClearBtn').addEventListener('click', () => {
+  refImage = null;
+  const w = parseInt(refCanvas.style.width);
+  const h = parseInt(refCanvas.style.height);
+  refCtx.clearRect(0, 0, w, h);
+});
+
+function drawRefImage() {
+  const w = parseInt(refCanvas.style.width);
+  const h = parseInt(refCanvas.style.height);
+  refCtx.clearRect(0, 0, w, h);
+  if (!refImage) return;
+
+  refCtx.save();
+  refCtx.globalAlpha = refOpacityValue;
+
+  // Fit image to canvas while maintaining aspect ratio
+  const imgAspect = refImage.width / refImage.height;
+  const canvasAspect = w / h;
+  let drawW, drawH, drawX, drawY;
+
+  if (imgAspect > canvasAspect) {
+    drawW = w;
+    drawH = w / imgAspect;
+    drawX = 0;
+    drawY = (h - drawH) / 2;
+  } else {
+    drawH = h;
+    drawW = h * imgAspect;
+    drawX = (w - drawW) / 2;
+    drawY = 0;
+  }
+
+  refCtx.drawImage(refImage, drawX, drawY, drawW, drawH);
+  refCtx.restore();
+}
 
 // --- Drawing ---
 function getPos(e) {
@@ -207,7 +315,6 @@ function moveStroke(e) {
   const t = performance.now() - currentStroke._startTime;
   currentStroke.points.push({ x: p.x, y: p.y, t: Math.round(t) });
 
-  // Draw segment
   ctx.lineTo(p.x, p.y);
   ctx.stroke();
   ctx.beginPath();
@@ -222,7 +329,6 @@ function endStroke(e) {
   if (!isDrawing || !currentStroke) return;
   e.preventDefault();
   isDrawing = false;
-  // Only save strokes with more than 1 point
   if (currentStroke.points.length >= 2) {
     delete currentStroke._startTime;
     strokes.push(currentStroke);
@@ -237,7 +343,6 @@ function handleEraserTap(e) {
   if (!eraserMode) return;
   e.preventDefault();
   const pos = getPos(e);
-  // Find and remove closest stroke within threshold
   const threshold = 20;
   let bestIdx = -1;
   let bestDist = Infinity;
@@ -274,7 +379,6 @@ canvas.addEventListener('mousemove', moveStroke);
 canvas.addEventListener('mouseup', endStroke);
 canvas.addEventListener('mouseleave', endStroke);
 
-// Prevent scroll / zoom on canvas
 canvas.addEventListener('gesturestart', e => e.preventDefault());
 canvas.addEventListener('gesturechange', e => e.preventDefault());
 document.addEventListener('touchmove', e => {
@@ -283,7 +387,9 @@ document.addEventListener('touchmove', e => {
 
 // --- Redraw all strokes ---
 function redraw() {
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  const w = parseInt(canvas.style.width);
+  const h = parseInt(canvas.style.height);
+  ctx.clearRect(0, 0, w, h);
   for (const stroke of strokes) {
     if (stroke.points.length < 2) continue;
     ctx.beginPath();
