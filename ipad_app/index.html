@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>VRC QVPen Drawing</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{
+  width:100%;height:100%;overflow:hidden;
+  background:#1a1a2e;color:#e0e0e0;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  touch-action:none;-webkit-touch-callout:none;-webkit-user-select:none;user-select:none;
+}
+
+/* ===== Toolbar ===== */
+.toolbar{
+  position:fixed;top:0;left:0;right:0;height:56px;
+  background:#16213e;display:flex;align-items:center;
+  padding:0 10px;gap:8px;z-index:20;
+  box-shadow:0 2px 8px rgba(0,0,0,.4);
+}
+.toolbar button{
+  background:#0f3460;color:#e0e0e0;border:none;
+  padding:6px 14px;border-radius:8px;font-size:13px;
+  cursor:pointer;min-height:36px;white-space:nowrap;
+  transition:background .15s;
+}
+.toolbar button:active{background:#533483}
+.toolbar button.active{background:#e94560}
+.toolbar .sep{width:1px;height:28px;background:#334}
+.slider-group{display:flex;align-items:center;gap:4px}
+.slider-group label{font-size:12px;white-space:nowrap}
+.slider-group input[type=range]{width:80px;accent-color:#e94560}
+.slider-group .val{font-size:12px;min-width:22px;text-align:center}
+
+/* ===== Canvas ===== */
+#canvas{
+  position:fixed;top:56px;left:0;
+  background:#ffffff;cursor:crosshair;
+}
+#canvas.eraser-mode{cursor:pointer}
+
+/* ===== Info bar ===== */
+.info{
+  position:fixed;bottom:8px;left:50%;transform:translateX(-50%);
+  background:rgba(0,0,0,.55);padding:4px 14px;border-radius:12px;
+  font-size:12px;z-index:20;pointer-events:none;
+}
+
+/* ===== Modal ===== */
+.modal-bg{
+  display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);
+  z-index:100;justify-content:center;align-items:center;
+}
+.modal-bg.show{display:flex}
+.modal{
+  background:#16213e;border-radius:12px;padding:24px;
+  min-width:280px;max-width:90vw;
+}
+.modal h3{margin-bottom:12px;font-size:16px}
+.modal .actions{display:flex;gap:8px;margin-top:16px;justify-content:flex-end}
+.modal button{
+  background:#0f3460;color:#e0e0e0;border:none;
+  padding:8px 20px;border-radius:8px;font-size:14px;cursor:pointer;
+}
+.modal button.primary{background:#e94560}
+.modal button:active{opacity:.8}
+</style>
+</head>
+<body>
+
+<!-- Toolbar -->
+<div class="toolbar">
+  <div class="slider-group">
+    <label>補正:</label>
+    <input type="range" id="smoothSlider" min="0" max="20" value="8">
+    <span class="val" id="smoothVal">8</span>
+  </div>
+  <div class="sep"></div>
+  <div class="slider-group">
+    <label>太さ:</label>
+    <input type="range" id="widthSlider" min="1" max="20" value="3">
+    <span class="val" id="widthVal">3</span>
+  </div>
+  <div class="sep"></div>
+  <button id="undoBtn">戻す</button>
+  <button id="eraserBtn">消しゴム</button>
+  <button id="clearBtn">全消去</button>
+  <div class="sep"></div>
+  <button id="exportBtn" style="background:#0a7e3f">保存</button>
+</div>
+
+<!-- Canvas -->
+<canvas id="canvas"></canvas>
+
+<!-- Info -->
+<div class="info">
+  <span id="infoText">0 ストローク</span>
+</div>
+
+<!-- Confirm clear modal -->
+<div class="modal-bg" id="clearModal">
+  <div class="modal">
+    <h3>全消去しますか？</h3>
+    <p style="font-size:14px;color:#aaa">全てのストロークが削除されます。</p>
+    <div class="actions">
+      <button id="clearCancel">キャンセル</button>
+      <button id="clearConfirm" class="primary">消去</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ============================================================
+//  VRC QVPen Drawing Tool - iPad Web App
+// ============================================================
+
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+
+// --- State ---
+let strokes = [];          // Array of {points:[{x,y,t}], width}
+let currentStroke = null;   // While drawing
+let isDrawing = false;
+let eraserMode = false;
+
+// Smoothing state
+let smoothX = 0, smoothY = 0;
+
+// --- Resize ---
+function resize() {
+  const dpr = window.devicePixelRatio || 1;
+  const w = window.innerWidth;
+  const h = window.innerHeight - 56;
+  canvas.style.width = w + 'px';
+  canvas.style.height = h + 'px';
+  canvas.width = w * dpr;
+  canvas.height = h * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  redraw();
+}
+window.addEventListener('resize', resize);
+resize();
+
+// --- Settings ---
+const smoothSlider = document.getElementById('smoothSlider');
+const smoothVal = document.getElementById('smoothVal');
+const widthSlider = document.getElementById('widthSlider');
+const widthVal = document.getElementById('widthVal');
+
+smoothSlider.addEventListener('input', () => { smoothVal.textContent = smoothSlider.value; });
+widthSlider.addEventListener('input', () => { widthVal.textContent = widthSlider.value; });
+
+function getSmoothFactor() { return parseInt(smoothSlider.value); }
+function getLineWidth() { return parseInt(widthSlider.value); }
+
+// --- Drawing ---
+function getPos(e) {
+  const rect = canvas.getBoundingClientRect();
+  if (e.touches && e.touches.length > 0) {
+    return { x: e.touches[0].clientX - rect.left, y: e.touches[0].clientY - rect.top };
+  }
+  return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+}
+
+function smoothPoint(raw) {
+  const s = getSmoothFactor();
+  if (s === 0 || !currentStroke || currentStroke.points.length === 0) {
+    smoothX = raw.x;
+    smoothY = raw.y;
+  } else {
+    const alpha = 1 / (1 + s * 0.8);
+    smoothX = alpha * raw.x + (1 - alpha) * smoothX;
+    smoothY = alpha * raw.y + (1 - alpha) * smoothY;
+  }
+  return { x: smoothX, y: smoothY };
+}
+
+function startStroke(e) {
+  if (eraserMode) return;
+  e.preventDefault();
+  isDrawing = true;
+  const raw = getPos(e);
+  const p = smoothPoint(raw);
+  const t = performance.now();
+  currentStroke = {
+    points: [{ x: p.x, y: p.y, t: 0 }],
+    width: getLineWidth(),
+    _startTime: t
+  };
+  ctx.beginPath();
+  ctx.strokeStyle = '#000';
+  ctx.lineWidth = currentStroke.width;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.moveTo(p.x, p.y);
+}
+
+function moveStroke(e) {
+  if (!isDrawing || !currentStroke) return;
+  e.preventDefault();
+  const raw = getPos(e);
+  const p = smoothPoint(raw);
+  const t = performance.now() - currentStroke._startTime;
+  currentStroke.points.push({ x: p.x, y: p.y, t: Math.round(t) });
+
+  // Draw segment
+  ctx.lineTo(p.x, p.y);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.strokeStyle = '#000';
+  ctx.lineWidth = currentStroke.width;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.moveTo(p.x, p.y);
+}
+
+function endStroke(e) {
+  if (!isDrawing || !currentStroke) return;
+  e.preventDefault();
+  isDrawing = false;
+  // Only save strokes with more than 1 point
+  if (currentStroke.points.length >= 2) {
+    delete currentStroke._startTime;
+    strokes.push(currentStroke);
+  }
+  currentStroke = null;
+  ctx.beginPath();
+  updateInfo();
+}
+
+// --- Eraser ---
+function handleEraserTap(e) {
+  if (!eraserMode) return;
+  e.preventDefault();
+  const pos = getPos(e);
+  // Find and remove closest stroke within threshold
+  const threshold = 20;
+  let bestIdx = -1;
+  let bestDist = Infinity;
+  for (let i = strokes.length - 1; i >= 0; i--) {
+    for (const pt of strokes[i].points) {
+      const d = Math.hypot(pt.x - pos.x, pt.y - pos.y);
+      if (d < threshold && d < bestDist) {
+        bestDist = d;
+        bestIdx = i;
+      }
+    }
+  }
+  if (bestIdx >= 0) {
+    strokes.splice(bestIdx, 1);
+    redraw();
+    updateInfo();
+  }
+}
+
+// --- Canvas events ---
+canvas.addEventListener('touchstart', (e) => {
+  if (eraserMode) { handleEraserTap(e); return; }
+  startStroke(e);
+}, { passive: false });
+canvas.addEventListener('touchmove', moveStroke, { passive: false });
+canvas.addEventListener('touchend', endStroke, { passive: false });
+canvas.addEventListener('touchcancel', endStroke, { passive: false });
+
+canvas.addEventListener('mousedown', (e) => {
+  if (eraserMode) { handleEraserTap(e); return; }
+  startStroke(e);
+});
+canvas.addEventListener('mousemove', moveStroke);
+canvas.addEventListener('mouseup', endStroke);
+canvas.addEventListener('mouseleave', endStroke);
+
+// Prevent scroll / zoom on canvas
+canvas.addEventListener('gesturestart', e => e.preventDefault());
+canvas.addEventListener('gesturechange', e => e.preventDefault());
+document.addEventListener('touchmove', e => {
+  if (e.target === canvas) e.preventDefault();
+}, { passive: false });
+
+// --- Redraw all strokes ---
+function redraw() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  for (const stroke of strokes) {
+    if (stroke.points.length < 2) continue;
+    ctx.beginPath();
+    ctx.strokeStyle = '#000';
+    ctx.lineWidth = stroke.width;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.moveTo(stroke.points[0].x, stroke.points[0].y);
+    for (let i = 1; i < stroke.points.length; i++) {
+      ctx.lineTo(stroke.points[i].x, stroke.points[i].y);
+    }
+    ctx.stroke();
+  }
+}
+
+// --- UI ---
+function updateInfo() {
+  document.getElementById('infoText').textContent = strokes.length + ' ストローク';
+}
+
+// Undo
+document.getElementById('undoBtn').addEventListener('click', () => {
+  if (strokes.length > 0) {
+    strokes.pop();
+    redraw();
+    updateInfo();
+  }
+});
+
+// Eraser toggle
+const eraserBtn = document.getElementById('eraserBtn');
+eraserBtn.addEventListener('click', () => {
+  eraserMode = !eraserMode;
+  eraserBtn.classList.toggle('active', eraserMode);
+  canvas.classList.toggle('eraser-mode', eraserMode);
+});
+
+// Clear
+document.getElementById('clearBtn').addEventListener('click', () => {
+  if (strokes.length === 0) return;
+  document.getElementById('clearModal').classList.add('show');
+});
+document.getElementById('clearCancel').addEventListener('click', () => {
+  document.getElementById('clearModal').classList.remove('show');
+});
+document.getElementById('clearConfirm').addEventListener('click', () => {
+  strokes = [];
+  redraw();
+  updateInfo();
+  document.getElementById('clearModal').classList.remove('show');
+});
+
+// --- Export ---
+document.getElementById('exportBtn').addEventListener('click', () => {
+  if (strokes.length === 0) { alert('描画データがありません'); return; }
+
+  const canvasW = parseInt(canvas.style.width);
+  const canvasH = parseInt(canvas.style.height);
+
+  const data = {
+    version: 1,
+    canvas: { width: canvasW, height: canvasH },
+    smoothing: getSmoothFactor(),
+    strokes: strokes.map((s, i) => ({
+      id: i,
+      width: s.width,
+      points: s.points.map(p => ({
+        x: Math.round(p.x * 100) / 100,
+        y: Math.round(p.y * 100) / 100,
+        t: p.t
+      }))
+    }))
+  };
+
+  const json = JSON.stringify(data, null, 2);
+  const blob = new Blob([json], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  const now = new Date();
+  const ts = now.getFullYear()
+    + String(now.getMonth()+1).padStart(2,'0')
+    + String(now.getDate()).padStart(2,'0')
+    + '_'
+    + String(now.getHours()).padStart(2,'0')
+    + String(now.getMinutes()).padStart(2,'0')
+    + String(now.getSeconds()).padStart(2,'0');
+  a.download = 'qvpen_drawing_' + ts + '.json';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+});
+
+// --- Keyboard shortcut ---
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'z' && (e.ctrlKey || e.metaKey)) {
+    e.preventDefault();
+    if (strokes.length > 0) {
+      strokes.pop();
+      redraw();
+      updateInfo();
+    }
+  }
+});
+
+updateInfo();
+</script>
+</body>
+</html>
