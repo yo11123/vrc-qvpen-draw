@@ -15,7 +15,6 @@ html,body{
   touch-action:none;-webkit-touch-callout:none;-webkit-user-select:none;user-select:none;
 }
 
-/* ===== Toolbar ===== */
 .toolbar{
   position:fixed;top:0;left:0;right:0;height:56px;
   background:#16213e;display:flex;align-items:center;
@@ -37,7 +36,6 @@ html,body{
 .slider-group input[type=range]{width:70px;accent-color:#e94560}
 .slider-group .val{font-size:12px;min-width:22px;text-align:center}
 
-/* ===== Canvas layers ===== */
 .canvas-container{
   position:fixed;top:56px;left:0;right:0;bottom:0;
   background:#ffffff;
@@ -49,14 +47,12 @@ html,body{
 #canvas{z-index:2;background:transparent;cursor:crosshair}
 #canvas.eraser-mode{cursor:pointer}
 
-/* ===== Info bar ===== */
 .info{
   position:fixed;bottom:8px;left:50%;transform:translateX(-50%);
   background:rgba(0,0,0,.55);padding:4px 14px;border-radius:12px;
   font-size:12px;z-index:20;pointer-events:none;
 }
 
-/* ===== Modal ===== */
 .modal-bg{
   display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);
   z-index:100;justify-content:center;align-items:center;
@@ -80,7 +76,6 @@ html,body{
 </head>
 <body>
 
-<!-- Toolbar -->
 <div class="toolbar">
   <div class="slider-group">
     <label>補正:</label>
@@ -111,7 +106,6 @@ html,body{
   <button id="exportBtn" style="background:#0a7e3f">保存</button>
 </div>
 
-<!-- Canvas layers -->
 <div class="canvas-container">
   <canvas id="refCanvas"></canvas>
   <canvas id="canvas"></canvas>
@@ -119,12 +113,10 @@ html,body{
 
 <input type="file" id="refFileInput" accept="image/*">
 
-<!-- Info -->
 <div class="info">
-  <span id="infoText">0 ストローク | 100%</span>
+  <span id="infoText">0 ストローク | 100% | 0°</span>
 </div>
 
-<!-- Confirm clear modal -->
 <div class="modal-bg" id="clearModal">
   <div class="modal">
     <h3>全消去しますか？</h3>
@@ -137,10 +129,6 @@ html,body{
 </div>
 
 <script>
-// ============================================================
-//  VRC QVPen Drawing Tool - iPad Web App
-// ============================================================
-
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
 const refCanvas = document.getElementById('refCanvas');
@@ -151,48 +139,57 @@ let strokes = [];
 let currentStroke = null;
 let isDrawing = false;
 let eraserMode = false;
-
-// Smoothing state
 let smoothX = 0, smoothY = 0;
-
-// Reference image state
 let refImage = null;
 let refOpacityValue = 0.3;
 
-// --- View transform (zoom & pan) ---
+// --- View transform (zoom, pan, rotate) ---
 let viewScale = 1;
 let viewPanX = 0;
 let viewPanY = 0;
+let viewRotation = 0; // radians
 
 // Pinch state
 let isPinching = false;
 let pinchStartDist = 0;
+let pinchStartAngle = 0;
 let pinchStartScale = 1;
+let pinchStartRotation = 0;
 let pinchStartMidX = 0;
 let pinchStartMidY = 0;
 let pinchStartPanX = 0;
 let pinchStartPanY = 0;
 
-// Screen → World coordinate conversion
+// --- Coordinate transforms ---
 function screenToWorld(sx, sy) {
-  return {
-    x: (sx - viewPanX) / viewScale,
-    y: (sy - viewPanY) / viewScale
-  };
+  // Undo pan
+  const tx = sx - viewPanX;
+  const ty = sy - viewPanY;
+  // Undo rotation
+  const cosR = Math.cos(-viewRotation);
+  const sinR = Math.sin(-viewRotation);
+  const rx = tx * cosR - ty * sinR;
+  const ry = tx * sinR + ty * cosR;
+  // Undo scale
+  return { x: rx / viewScale, y: ry / viewScale };
 }
 
-// World → Screen coordinate conversion
 function worldToScreen(wx, wy) {
-  return {
-    x: wx * viewScale + viewPanX,
-    y: wy * viewScale + viewPanY
-  };
+  // Apply scale
+  const sx = wx * viewScale;
+  const sy = wy * viewScale;
+  // Apply rotation
+  const cosR = Math.cos(viewRotation);
+  const sinR = Math.sin(viewRotation);
+  const rx = sx * cosR - sy * sinR;
+  const ry = sx * sinR + sy * cosR;
+  // Apply pan
+  return { x: rx + viewPanX, y: ry + viewPanY };
 }
 
-// --- Canvas size (CSS pixels) ---
+// --- Canvas size ---
 let canvasW = 0, canvasH = 0;
 
-// --- Resize ---
 function resize() {
   const dpr = window.devicePixelRatio || 1;
   canvasW = window.innerWidth;
@@ -263,29 +260,27 @@ function drawRefImage() {
   refCtx.clearRect(0, 0, canvasW, canvasH);
   if (!refImage) return;
 
-  refCtx.save();
-  refCtx.globalAlpha = refOpacityValue;
-
-  // Fit image to full canvas (world coordinates), then apply view transform
+  // Calculate image fit in world coordinates
   const imgAspect = refImage.width / refImage.height;
   const canvasAspect = canvasW / canvasH;
   let drawW, drawH, drawX, drawY;
-
   if (imgAspect > canvasAspect) {
-    drawW = canvasW;
-    drawH = canvasW / imgAspect;
-    drawX = 0;
-    drawY = (canvasH - drawH) / 2;
+    drawW = canvasW; drawH = canvasW / imgAspect;
+    drawX = 0; drawY = (canvasH - drawH) / 2;
   } else {
-    drawH = canvasH;
-    drawW = canvasH * imgAspect;
-    drawX = (canvasW - drawW) / 2;
-    drawY = 0;
+    drawH = canvasH; drawW = canvasH * imgAspect;
+    drawX = (canvasW - drawW) / 2; drawY = 0;
   }
 
-  // Apply view transform
-  const s = worldToScreen(drawX, drawY);
-  refCtx.drawImage(refImage, s.x, s.y, drawW * viewScale, drawH * viewScale);
+  // Draw the 4 corners in screen space and use canvas transform
+  refCtx.save();
+  refCtx.globalAlpha = refOpacityValue;
+
+  // Apply view transform to refCtx
+  refCtx.translate(viewPanX, viewPanY);
+  refCtx.rotate(viewRotation);
+  refCtx.scale(viewScale, viewScale);
+  refCtx.drawImage(refImage, drawX, drawY, drawW, drawH);
   refCtx.restore();
 }
 
@@ -300,15 +295,13 @@ function getPos(e) {
     sx = e.clientX - rect.left;
     sy = e.clientY - rect.top;
   }
-  // Convert screen to world coordinates
   return screenToWorld(sx, sy);
 }
 
 function smoothPoint(raw) {
   const s = getSmoothFactor();
   if (s === 0 || !currentStroke || currentStroke.points.length === 0) {
-    smoothX = raw.x;
-    smoothY = raw.y;
+    smoothX = raw.x; smoothY = raw.y;
   } else {
     const alpha = 1 / (1 + s * 0.8);
     smoothX = alpha * raw.x + (1 - alpha) * smoothX;
@@ -323,14 +316,11 @@ function startStroke(e) {
   isDrawing = true;
   const raw = getPos(e);
   const p = smoothPoint(raw);
-  const t = performance.now();
   currentStroke = {
     points: [{ x: p.x, y: p.y, t: 0 }],
     width: getLineWidth(),
-    _startTime: t
+    _startTime: performance.now()
   };
-
-  // Draw first point on screen
   const sp = worldToScreen(p.x, p.y);
   ctx.beginPath();
   ctx.strokeStyle = '#000';
@@ -372,12 +362,15 @@ function endStroke(e) {
   updateInfo();
 }
 
-// --- Pinch zoom & pan ---
+// --- Pinch helpers ---
 function getTouchDist(e) {
   const t = e.touches;
-  const dx = t[0].clientX - t[1].clientX;
-  const dy = t[0].clientY - t[1].clientY;
-  return Math.hypot(dx, dy);
+  return Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+}
+
+function getTouchAngle(e) {
+  const t = e.touches;
+  return Math.atan2(t[1].clientY - t[0].clientY, t[1].clientX - t[0].clientX);
 }
 
 function getTouchMid(e) {
@@ -392,17 +385,13 @@ function getTouchMid(e) {
 // --- Canvas events ---
 canvas.addEventListener('touchstart', (e) => {
   e.preventDefault();
-
   if (e.touches.length === 2) {
-    // Start pinch — cancel any ongoing drawing
-    if (isDrawing) {
-      isDrawing = false;
-      currentStroke = null;
-      ctx.beginPath();
-    }
+    if (isDrawing) { isDrawing = false; currentStroke = null; ctx.beginPath(); }
     isPinching = true;
     pinchStartDist = getTouchDist(e);
+    pinchStartAngle = getTouchAngle(e);
     pinchStartScale = viewScale;
+    pinchStartRotation = viewRotation;
     const mid = getTouchMid(e);
     pinchStartMidX = mid.x;
     pinchStartMidY = mid.y;
@@ -410,7 +399,6 @@ canvas.addEventListener('touchstart', (e) => {
     pinchStartPanY = viewPanY;
     return;
   }
-
   if (e.touches.length === 1 && !isPinching) {
     if (eraserMode) { handleEraserTap(e); return; }
     startStroke(e);
@@ -419,42 +407,49 @@ canvas.addEventListener('touchstart', (e) => {
 
 canvas.addEventListener('touchmove', (e) => {
   e.preventDefault();
-
   if (isPinching && e.touches.length === 2) {
     const dist = getTouchDist(e);
+    const angle = getTouchAngle(e);
     const mid = getTouchMid(e);
 
-    // Calculate new scale
     const newScale = Math.min(Math.max(pinchStartScale * (dist / pinchStartDist), 0.2), 10);
+    const newRotation = pinchStartRotation + (angle - pinchStartAngle);
 
-    // Zoom towards pinch midpoint
-    // The world point under the initial midpoint should stay under the current midpoint
-    const worldMidX = (pinchStartMidX - pinchStartPanX) / pinchStartScale;
-    const worldMidY = (pinchStartMidY - pinchStartPanY) / pinchStartScale;
+    // World point that was under the initial pinch midpoint
+    const cosR0 = Math.cos(-pinchStartRotation);
+    const sinR0 = Math.sin(-pinchStartRotation);
+    const tx0 = pinchStartMidX - pinchStartPanX;
+    const ty0 = pinchStartMidY - pinchStartPanY;
+    const worldX = (tx0 * cosR0 - ty0 * sinR0) / pinchStartScale;
+    const worldY = (tx0 * sinR0 + ty0 * cosR0) / pinchStartScale;
+
+    // That world point should now appear at current mid
+    const sx = worldX * newScale;
+    const sy = worldY * newScale;
+    const cosR1 = Math.cos(newRotation);
+    const sinR1 = Math.sin(newRotation);
+    const rx = sx * cosR1 - sy * sinR1;
+    const ry = sx * sinR1 + sy * cosR1;
 
     viewScale = newScale;
-    viewPanX = mid.x - worldMidX * viewScale;
-    viewPanY = mid.y - worldMidY * viewScale;
+    viewRotation = newRotation;
+    viewPanX = mid.x - rx;
+    viewPanY = mid.y - ry;
 
     drawRefImage();
     redraw();
     updateInfo();
     return;
   }
-
   moveStroke(e);
 }, { passive: false });
 
 canvas.addEventListener('touchend', (e) => {
   e.preventDefault();
-
   if (isPinching) {
-    if (e.touches.length < 2) {
-      isPinching = false;
-    }
+    if (e.touches.length < 2) isPinching = false;
     return;
   }
-
   endStroke(e);
 }, { passive: false });
 
@@ -463,7 +458,7 @@ canvas.addEventListener('touchcancel', (e) => {
   endStroke(e);
 }, { passive: false });
 
-// Mouse events (PC testing)
+// Mouse events (PC)
 canvas.addEventListener('mousedown', (e) => {
   if (eraserMode) { handleEraserTap(e); return; }
   startStroke(e);
@@ -478,13 +473,13 @@ canvas.addEventListener('wheel', (e) => {
   const rect = canvas.getBoundingClientRect();
   const mx = e.clientX - rect.left;
   const my = e.clientY - rect.top;
-
   const world = screenToWorld(mx, my);
   const factor = e.deltaY < 0 ? 1.1 : 0.9;
   viewScale = Math.min(Math.max(viewScale * factor, 0.2), 10);
-  viewPanX = mx - world.x * viewScale;
-  viewPanY = my - world.y * viewScale;
-
+  // Keep world point under cursor
+  const sp = worldToScreen(world.x, world.y);
+  viewPanX += mx - sp.x;
+  viewPanY += my - sp.y;
   drawRefImage();
   redraw();
   updateInfo();
@@ -498,7 +493,7 @@ function handleEraserTap(e) {
   if (!eraserMode) return;
   e.preventDefault();
   const pos = getPos(e);
-  const threshold = 20 / viewScale; // Adjust for zoom level
+  const threshold = 20 / viewScale;
   let bestIdx = -1;
   let bestDist = Infinity;
   for (let i = strokes.length - 1; i >= 0; i--) {
@@ -517,7 +512,7 @@ function handleEraserTap(e) {
   }
 }
 
-// --- Redraw all strokes ---
+// --- Redraw ---
 function redraw() {
   ctx.clearRect(0, 0, canvasW, canvasH);
   for (const stroke of strokes) {
@@ -540,19 +535,16 @@ function redraw() {
 // --- UI ---
 function updateInfo() {
   const pct = Math.round(viewScale * 100);
-  document.getElementById('infoText').textContent = strokes.length + ' ストローク | ' + pct + '%';
+  let deg = Math.round(viewRotation * 180 / Math.PI) % 360;
+  if (deg < 0) deg += 360;
+  document.getElementById('infoText').textContent =
+    strokes.length + ' ストローク | ' + pct + '% | ' + deg + '\u00B0';
 }
 
-// Undo
 document.getElementById('undoBtn').addEventListener('click', () => {
-  if (strokes.length > 0) {
-    strokes.pop();
-    redraw();
-    updateInfo();
-  }
+  if (strokes.length > 0) { strokes.pop(); redraw(); updateInfo(); }
 });
 
-// Eraser toggle
 const eraserBtn = document.getElementById('eraserBtn');
 eraserBtn.addEventListener('click', () => {
   eraserMode = !eraserMode;
@@ -560,7 +552,6 @@ eraserBtn.addEventListener('click', () => {
   canvas.classList.toggle('eraser-mode', eraserMode);
 });
 
-// Clear
 document.getElementById('clearBtn').addEventListener('click', () => {
   if (strokes.length === 0) return;
   document.getElementById('clearModal').classList.add('show');
@@ -577,9 +568,7 @@ document.getElementById('clearConfirm').addEventListener('click', () => {
 
 // Reset view
 document.getElementById('resetViewBtn').addEventListener('click', () => {
-  viewScale = 1;
-  viewPanX = 0;
-  viewPanY = 0;
+  viewScale = 1; viewPanX = 0; viewPanY = 0; viewRotation = 0;
   drawRefImage();
   redraw();
   updateInfo();
@@ -588,15 +577,12 @@ document.getElementById('resetViewBtn').addEventListener('click', () => {
 // --- Export ---
 document.getElementById('exportBtn').addEventListener('click', () => {
   if (strokes.length === 0) { alert('描画データがありません'); return; }
-
-  // Export uses world coordinates (unaffected by zoom/pan)
   const data = {
     version: 1,
     canvas: { width: canvasW, height: canvasH },
     smoothing: getSmoothFactor(),
     strokes: strokes.map((s, i) => ({
-      id: i,
-      width: s.width,
+      id: i, width: s.width,
       points: s.points.map(p => ({
         x: Math.round(p.x * 100) / 100,
         y: Math.round(p.y * 100) / 100,
@@ -604,7 +590,6 @@ document.getElementById('exportBtn').addEventListener('click', () => {
       }))
     }))
   };
-
   const json = JSON.stringify(data, null, 2);
   const blob = new Blob([json], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
@@ -613,8 +598,7 @@ document.getElementById('exportBtn').addEventListener('click', () => {
   const now = new Date();
   const ts = now.getFullYear()
     + String(now.getMonth()+1).padStart(2,'0')
-    + String(now.getDate()).padStart(2,'0')
-    + '_'
+    + String(now.getDate()).padStart(2,'0') + '_'
     + String(now.getHours()).padStart(2,'0')
     + String(now.getMinutes()).padStart(2,'0')
     + String(now.getSeconds()).padStart(2,'0');
@@ -625,15 +609,10 @@ document.getElementById('exportBtn').addEventListener('click', () => {
   URL.revokeObjectURL(url);
 });
 
-// --- Keyboard shortcut ---
 document.addEventListener('keydown', (e) => {
   if (e.key === 'z' && (e.ctrlKey || e.metaKey)) {
     e.preventDefault();
-    if (strokes.length > 0) {
-      strokes.pop();
-      redraw();
-      updateInfo();
-    }
+    if (strokes.length > 0) { strokes.pop(); redraw(); updateInfo(); }
   }
 });
 
