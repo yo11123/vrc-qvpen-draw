@@ -40,6 +40,7 @@ html,body{
 /* ===== Canvas layers ===== */
 .canvas-container{
   position:fixed;top:56px;left:0;right:0;bottom:0;
+  background:#ffffff;
 }
 #refCanvas,#canvas{
   position:absolute;top:0;left:0;width:100%;height:100%;
@@ -74,7 +75,6 @@ html,body{
 .modal button.primary{background:#e94560}
 .modal button:active{opacity:.8}
 
-/* hidden file input */
 #refFileInput{display:none}
 </style>
 </head>
@@ -106,6 +106,8 @@ html,body{
   </div>
   <button id="refClearBtn">下絵消去</button>
   <div class="sep"></div>
+  <button id="resetViewBtn">表示リセット</button>
+  <div class="sep"></div>
   <button id="exportBtn" style="background:#0a7e3f">保存</button>
 </div>
 
@@ -115,12 +117,11 @@ html,body{
   <canvas id="canvas"></canvas>
 </div>
 
-<!-- Hidden file input for reference image -->
 <input type="file" id="refFileInput" accept="image/*">
 
 <!-- Info -->
 <div class="info">
-  <span id="infoText">0 ストローク</span>
+  <span id="infoText">0 ストローク | 100%</span>
 </div>
 
 <!-- Confirm clear modal -->
@@ -155,27 +156,58 @@ let eraserMode = false;
 let smoothX = 0, smoothY = 0;
 
 // Reference image state
-let refImage = null;  // loaded Image object
+let refImage = null;
 let refOpacityValue = 0.3;
+
+// --- View transform (zoom & pan) ---
+let viewScale = 1;
+let viewPanX = 0;
+let viewPanY = 0;
+
+// Pinch state
+let isPinching = false;
+let pinchStartDist = 0;
+let pinchStartScale = 1;
+let pinchStartMidX = 0;
+let pinchStartMidY = 0;
+let pinchStartPanX = 0;
+let pinchStartPanY = 0;
+
+// Screen → World coordinate conversion
+function screenToWorld(sx, sy) {
+  return {
+    x: (sx - viewPanX) / viewScale,
+    y: (sy - viewPanY) / viewScale
+  };
+}
+
+// World → Screen coordinate conversion
+function worldToScreen(wx, wy) {
+  return {
+    x: wx * viewScale + viewPanX,
+    y: wy * viewScale + viewPanY
+  };
+}
+
+// --- Canvas size (CSS pixels) ---
+let canvasW = 0, canvasH = 0;
 
 // --- Resize ---
 function resize() {
   const dpr = window.devicePixelRatio || 1;
-  const w = window.innerWidth;
-  const h = window.innerHeight - 56;
+  canvasW = window.innerWidth;
+  canvasH = window.innerHeight - 56;
 
-  // Drawing canvas
-  canvas.style.width = w + 'px';
-  canvas.style.height = h + 'px';
-  canvas.width = w * dpr;
-  canvas.height = h * dpr;
+  canvas.style.width = canvasW + 'px';
+  canvas.style.height = canvasH + 'px';
+  canvas.width = canvasW * dpr;
+  canvas.height = canvasH * dpr;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-  // Reference canvas
-  refCanvas.style.width = w + 'px';
-  refCanvas.style.height = h + 'px';
-  refCanvas.width = w * dpr;
-  refCanvas.height = h * dpr;
+  refCanvas.style.width = canvasW + 'px';
+  refCanvas.style.height = canvasH + 'px';
+  refCanvas.width = canvasW * dpr;
+  refCanvas.height = canvasH * dpr;
   refCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
   drawRefImage();
@@ -186,30 +218,28 @@ resize();
 
 // --- Settings ---
 const smoothSlider = document.getElementById('smoothSlider');
-const smoothVal = document.getElementById('smoothVal');
+const smoothValEl = document.getElementById('smoothVal');
 const widthSlider = document.getElementById('widthSlider');
-const widthVal = document.getElementById('widthVal');
+const widthValEl = document.getElementById('widthVal');
 
-smoothSlider.addEventListener('input', () => { smoothVal.textContent = smoothSlider.value; });
-widthSlider.addEventListener('input', () => { widthVal.textContent = widthSlider.value; });
+smoothSlider.addEventListener('input', () => { smoothValEl.textContent = smoothSlider.value; });
+widthSlider.addEventListener('input', () => { widthValEl.textContent = widthSlider.value; });
 
 function getSmoothFactor() { return parseInt(smoothSlider.value); }
 function getLineWidth() { return parseInt(widthSlider.value); }
 
 // --- Reference image ---
 const refOpacitySlider = document.getElementById('refOpacity');
-const refOpacityVal = document.getElementById('refOpacityVal');
+const refOpacityValEl = document.getElementById('refOpacityVal');
 const refFileInput = document.getElementById('refFileInput');
 
 refOpacitySlider.addEventListener('input', () => {
   refOpacityValue = parseInt(refOpacitySlider.value) / 100;
-  refOpacityVal.textContent = refOpacitySlider.value + '%';
+  refOpacityValEl.textContent = refOpacitySlider.value + '%';
   drawRefImage();
 });
 
-document.getElementById('refBtn').addEventListener('click', () => {
-  refFileInput.click();
-});
+document.getElementById('refBtn').addEventListener('click', () => { refFileInput.click(); });
 
 refFileInput.addEventListener('change', (e) => {
   const file = e.target.files[0];
@@ -217,61 +247,61 @@ refFileInput.addEventListener('change', (e) => {
   const reader = new FileReader();
   reader.onload = (ev) => {
     const img = new Image();
-    img.onload = () => {
-      refImage = img;
-      drawRefImage();
-    };
+    img.onload = () => { refImage = img; drawRefImage(); };
     img.src = ev.target.result;
   };
   reader.readAsDataURL(file);
-  // reset so same file can be re-selected
   refFileInput.value = '';
 });
 
 document.getElementById('refClearBtn').addEventListener('click', () => {
   refImage = null;
-  const w = parseInt(refCanvas.style.width);
-  const h = parseInt(refCanvas.style.height);
-  refCtx.clearRect(0, 0, w, h);
+  refCtx.clearRect(0, 0, canvasW, canvasH);
 });
 
 function drawRefImage() {
-  const w = parseInt(refCanvas.style.width);
-  const h = parseInt(refCanvas.style.height);
-  refCtx.clearRect(0, 0, w, h);
+  refCtx.clearRect(0, 0, canvasW, canvasH);
   if (!refImage) return;
 
   refCtx.save();
   refCtx.globalAlpha = refOpacityValue;
 
-  // Fit image to canvas while maintaining aspect ratio
+  // Fit image to full canvas (world coordinates), then apply view transform
   const imgAspect = refImage.width / refImage.height;
-  const canvasAspect = w / h;
+  const canvasAspect = canvasW / canvasH;
   let drawW, drawH, drawX, drawY;
 
   if (imgAspect > canvasAspect) {
-    drawW = w;
-    drawH = w / imgAspect;
+    drawW = canvasW;
+    drawH = canvasW / imgAspect;
     drawX = 0;
-    drawY = (h - drawH) / 2;
+    drawY = (canvasH - drawH) / 2;
   } else {
-    drawH = h;
-    drawW = h * imgAspect;
-    drawX = (w - drawW) / 2;
+    drawH = canvasH;
+    drawW = canvasH * imgAspect;
+    drawX = (canvasW - drawW) / 2;
     drawY = 0;
   }
 
-  refCtx.drawImage(refImage, drawX, drawY, drawW, drawH);
+  // Apply view transform
+  const s = worldToScreen(drawX, drawY);
+  refCtx.drawImage(refImage, s.x, s.y, drawW * viewScale, drawH * viewScale);
   refCtx.restore();
 }
 
 // --- Drawing ---
 function getPos(e) {
   const rect = canvas.getBoundingClientRect();
+  let sx, sy;
   if (e.touches && e.touches.length > 0) {
-    return { x: e.touches[0].clientX - rect.left, y: e.touches[0].clientY - rect.top };
+    sx = e.touches[0].clientX - rect.left;
+    sy = e.touches[0].clientY - rect.top;
+  } else {
+    sx = e.clientX - rect.left;
+    sy = e.clientY - rect.top;
   }
-  return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+  // Convert screen to world coordinates
+  return screenToWorld(sx, sy);
 }
 
 function smoothPoint(raw) {
@@ -288,7 +318,7 @@ function smoothPoint(raw) {
 }
 
 function startStroke(e) {
-  if (eraserMode) return;
+  if (eraserMode || isPinching) return;
   e.preventDefault();
   isDrawing = true;
   const raw = getPos(e);
@@ -299,35 +329,39 @@ function startStroke(e) {
     width: getLineWidth(),
     _startTime: t
   };
+
+  // Draw first point on screen
+  const sp = worldToScreen(p.x, p.y);
   ctx.beginPath();
   ctx.strokeStyle = '#000';
-  ctx.lineWidth = currentStroke.width;
+  ctx.lineWidth = currentStroke.width * viewScale;
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
-  ctx.moveTo(p.x, p.y);
+  ctx.moveTo(sp.x, sp.y);
 }
 
 function moveStroke(e) {
-  if (!isDrawing || !currentStroke) return;
+  if (!isDrawing || !currentStroke || isPinching) return;
   e.preventDefault();
   const raw = getPos(e);
   const p = smoothPoint(raw);
   const t = performance.now() - currentStroke._startTime;
   currentStroke.points.push({ x: p.x, y: p.y, t: Math.round(t) });
 
-  ctx.lineTo(p.x, p.y);
+  const sp = worldToScreen(p.x, p.y);
+  ctx.lineTo(sp.x, sp.y);
   ctx.stroke();
   ctx.beginPath();
   ctx.strokeStyle = '#000';
-  ctx.lineWidth = currentStroke.width;
+  ctx.lineWidth = currentStroke.width * viewScale;
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
-  ctx.moveTo(p.x, p.y);
+  ctx.moveTo(sp.x, sp.y);
 }
 
 function endStroke(e) {
   if (!isDrawing || !currentStroke) return;
-  e.preventDefault();
+  if (e) e.preventDefault();
   isDrawing = false;
   if (currentStroke.points.length >= 2) {
     delete currentStroke._startTime;
@@ -338,12 +372,133 @@ function endStroke(e) {
   updateInfo();
 }
 
+// --- Pinch zoom & pan ---
+function getTouchDist(e) {
+  const t = e.touches;
+  const dx = t[0].clientX - t[1].clientX;
+  const dy = t[0].clientY - t[1].clientY;
+  return Math.hypot(dx, dy);
+}
+
+function getTouchMid(e) {
+  const rect = canvas.getBoundingClientRect();
+  const t = e.touches;
+  return {
+    x: (t[0].clientX + t[1].clientX) / 2 - rect.left,
+    y: (t[0].clientY + t[1].clientY) / 2 - rect.top
+  };
+}
+
+// --- Canvas events ---
+canvas.addEventListener('touchstart', (e) => {
+  e.preventDefault();
+
+  if (e.touches.length === 2) {
+    // Start pinch — cancel any ongoing drawing
+    if (isDrawing) {
+      isDrawing = false;
+      currentStroke = null;
+      ctx.beginPath();
+    }
+    isPinching = true;
+    pinchStartDist = getTouchDist(e);
+    pinchStartScale = viewScale;
+    const mid = getTouchMid(e);
+    pinchStartMidX = mid.x;
+    pinchStartMidY = mid.y;
+    pinchStartPanX = viewPanX;
+    pinchStartPanY = viewPanY;
+    return;
+  }
+
+  if (e.touches.length === 1 && !isPinching) {
+    if (eraserMode) { handleEraserTap(e); return; }
+    startStroke(e);
+  }
+}, { passive: false });
+
+canvas.addEventListener('touchmove', (e) => {
+  e.preventDefault();
+
+  if (isPinching && e.touches.length === 2) {
+    const dist = getTouchDist(e);
+    const mid = getTouchMid(e);
+
+    // Calculate new scale
+    const newScale = Math.min(Math.max(pinchStartScale * (dist / pinchStartDist), 0.2), 10);
+
+    // Zoom towards pinch midpoint
+    // The world point under the initial midpoint should stay under the current midpoint
+    const worldMidX = (pinchStartMidX - pinchStartPanX) / pinchStartScale;
+    const worldMidY = (pinchStartMidY - pinchStartPanY) / pinchStartScale;
+
+    viewScale = newScale;
+    viewPanX = mid.x - worldMidX * viewScale;
+    viewPanY = mid.y - worldMidY * viewScale;
+
+    drawRefImage();
+    redraw();
+    updateInfo();
+    return;
+  }
+
+  moveStroke(e);
+}, { passive: false });
+
+canvas.addEventListener('touchend', (e) => {
+  e.preventDefault();
+
+  if (isPinching) {
+    if (e.touches.length < 2) {
+      isPinching = false;
+    }
+    return;
+  }
+
+  endStroke(e);
+}, { passive: false });
+
+canvas.addEventListener('touchcancel', (e) => {
+  isPinching = false;
+  endStroke(e);
+}, { passive: false });
+
+// Mouse events (PC testing)
+canvas.addEventListener('mousedown', (e) => {
+  if (eraserMode) { handleEraserTap(e); return; }
+  startStroke(e);
+});
+canvas.addEventListener('mousemove', moveStroke);
+canvas.addEventListener('mouseup', endStroke);
+canvas.addEventListener('mouseleave', endStroke);
+
+// Mouse wheel zoom (PC)
+canvas.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  const rect = canvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left;
+  const my = e.clientY - rect.top;
+
+  const world = screenToWorld(mx, my);
+  const factor = e.deltaY < 0 ? 1.1 : 0.9;
+  viewScale = Math.min(Math.max(viewScale * factor, 0.2), 10);
+  viewPanX = mx - world.x * viewScale;
+  viewPanY = my - world.y * viewScale;
+
+  drawRefImage();
+  redraw();
+  updateInfo();
+}, { passive: false });
+
+canvas.addEventListener('gesturestart', e => e.preventDefault());
+canvas.addEventListener('gesturechange', e => e.preventDefault());
+
 // --- Eraser ---
 function handleEraserTap(e) {
   if (!eraserMode) return;
   e.preventDefault();
   const pos = getPos(e);
-  const threshold = 20;
+  const threshold = 20 / viewScale; // Adjust for zoom level
   let bestIdx = -1;
   let bestDist = Infinity;
   for (let i = strokes.length - 1; i >= 0; i--) {
@@ -362,44 +517,21 @@ function handleEraserTap(e) {
   }
 }
 
-// --- Canvas events ---
-canvas.addEventListener('touchstart', (e) => {
-  if (eraserMode) { handleEraserTap(e); return; }
-  startStroke(e);
-}, { passive: false });
-canvas.addEventListener('touchmove', moveStroke, { passive: false });
-canvas.addEventListener('touchend', endStroke, { passive: false });
-canvas.addEventListener('touchcancel', endStroke, { passive: false });
-
-canvas.addEventListener('mousedown', (e) => {
-  if (eraserMode) { handleEraserTap(e); return; }
-  startStroke(e);
-});
-canvas.addEventListener('mousemove', moveStroke);
-canvas.addEventListener('mouseup', endStroke);
-canvas.addEventListener('mouseleave', endStroke);
-
-canvas.addEventListener('gesturestart', e => e.preventDefault());
-canvas.addEventListener('gesturechange', e => e.preventDefault());
-document.addEventListener('touchmove', e => {
-  if (e.target === canvas) e.preventDefault();
-}, { passive: false });
-
 // --- Redraw all strokes ---
 function redraw() {
-  const w = parseInt(canvas.style.width);
-  const h = parseInt(canvas.style.height);
-  ctx.clearRect(0, 0, w, h);
+  ctx.clearRect(0, 0, canvasW, canvasH);
   for (const stroke of strokes) {
     if (stroke.points.length < 2) continue;
     ctx.beginPath();
     ctx.strokeStyle = '#000';
-    ctx.lineWidth = stroke.width;
+    ctx.lineWidth = stroke.width * viewScale;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
-    ctx.moveTo(stroke.points[0].x, stroke.points[0].y);
+    const s0 = worldToScreen(stroke.points[0].x, stroke.points[0].y);
+    ctx.moveTo(s0.x, s0.y);
     for (let i = 1; i < stroke.points.length; i++) {
-      ctx.lineTo(stroke.points[i].x, stroke.points[i].y);
+      const sp = worldToScreen(stroke.points[i].x, stroke.points[i].y);
+      ctx.lineTo(sp.x, sp.y);
     }
     ctx.stroke();
   }
@@ -407,7 +539,8 @@ function redraw() {
 
 // --- UI ---
 function updateInfo() {
-  document.getElementById('infoText').textContent = strokes.length + ' ストローク';
+  const pct = Math.round(viewScale * 100);
+  document.getElementById('infoText').textContent = strokes.length + ' ストローク | ' + pct + '%';
 }
 
 // Undo
@@ -442,13 +575,21 @@ document.getElementById('clearConfirm').addEventListener('click', () => {
   document.getElementById('clearModal').classList.remove('show');
 });
 
+// Reset view
+document.getElementById('resetViewBtn').addEventListener('click', () => {
+  viewScale = 1;
+  viewPanX = 0;
+  viewPanY = 0;
+  drawRefImage();
+  redraw();
+  updateInfo();
+});
+
 // --- Export ---
 document.getElementById('exportBtn').addEventListener('click', () => {
   if (strokes.length === 0) { alert('描画データがありません'); return; }
 
-  const canvasW = parseInt(canvas.style.width);
-  const canvasH = parseInt(canvas.style.height);
-
+  // Export uses world coordinates (unaffected by zoom/pan)
   const data = {
     version: 1,
     canvas: { width: canvasW, height: canvasH },
