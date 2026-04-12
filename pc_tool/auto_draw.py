@@ -256,9 +256,20 @@ class AutoDrawer:
             thickness_scale = max(1.0, thickness / 3.0)
             scale *= thickness_scale
 
-            # 中央揃えオフセット
-            offset_x = dst_x + (dst_w - src_w * scale) / 2
-            offset_y = dst_y + (dst_h - src_h * scale) / 2
+            # オフセット計算
+            use_tab = cfg.get('use_tab', True)
+            if use_tab and data.strokes and len(data.strokes[0]['points']) > 0:
+                # Tabモード: 最初のストロークの始点を画面中央に合わせる
+                # VRChatのTabモードはカーソルが画面中央から始まるため
+                sw = user32.GetSystemMetrics(0)
+                sh = user32.GetSystemMetrics(1)
+                first_pt = data.strokes[0]['points'][0]
+                offset_x = sw / 2 - (first_pt['x'] - src_min_x) * scale
+                offset_y = sh / 2 - (first_pt['y'] - src_min_y) * scale
+            else:
+                # 3Dモード: 描画エリア内で中央揃え
+                offset_x = dst_x + (dst_w - src_w * scale) / 2
+                offset_y = dst_y + (dst_h - src_h * scale) / 2
 
             def map_point(px, py):
                 sx = offset_x + (px - src_min_x) * scale
@@ -281,13 +292,6 @@ class AutoDrawer:
             if cfg.get('use_tab', True):
                 key_down_tab()
                 time.sleep(1.0)
-
-                # プライミング: VRChatのカーソル位置を同期させる
-                if data.strokes and len(data.strokes[0]['points']) > 0:
-                    p0 = data.strokes[0]['points'][0]
-                    prime_x, prime_y = map_point(p0['x'], p0['y'])
-                    mouse_move(prime_x, prime_y)
-                    time.sleep(0.5)
 
             # 前のストローク終点を追跡 (滑らか移動用)
             last_end_x, last_end_y = None, None
