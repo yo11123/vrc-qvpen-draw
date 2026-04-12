@@ -281,6 +281,11 @@ class AutoDrawer:
 
             # Tabキーを押す (SendInput + スキャンコード)
             if cfg.get('use_tab', True):
+                # Tab前にカーソルを画面中央に移動
+                # VRChatはTab押下時のカーソル位置を基準にするため、
+                # 中央から開始しないと感度補正の基準点がずれる
+                mouse_move(int(screen_cx), int(screen_cy))
+                time.sleep(0.1)
                 key_down_tab()
                 time.sleep(1.0)
 
