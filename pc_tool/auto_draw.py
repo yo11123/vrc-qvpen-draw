@@ -95,6 +95,17 @@ def mouse_move(x, y):
     inp.u.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE
     _send_inputs(inp)
 
+def smooth_move(from_x, from_y, to_x, to_y, duration=0.3, steps=30):
+    """2点間を滑らかに移動 (smoothstepで自然な加減速)"""
+    for i in range(1, steps + 1):
+        t = i / steps
+        # smoothstep: 始めと終わりが滑らかな補間
+        t = t * t * (3 - 2 * t)
+        x = from_x + (to_x - from_x) * t
+        y = from_y + (to_y - from_y) * t
+        mouse_move(int(x), int(y))
+        time.sleep(duration / steps)
+
 def mouse_down():
     """左クリック押下"""
     inp = INPUT()
@@ -296,6 +307,9 @@ class AutoDrawer:
                     mouse_move(prime_x, prime_y)
                     time.sleep(0.5)
 
+            # 前のストローク終点を追跡 (滑らか移動用)
+            last_end_x, last_end_y = None, None
+
             for idx, stroke in enumerate(data.strokes):
                 if not self.running:
                     break
@@ -312,13 +326,21 @@ class AutoDrawer:
                 if len(points) < 2:
                     continue
 
-                # 最初の点に移動 — ダブルムーブで確実にVRCカーソルを同期
+                # 最初の点に移動
                 sx, sy = map_point(points[0]['x'], points[0]['y'])
-                tab_sync = cfg.get('tab_sync_delay', 0.15)
-                mouse_move(sx, sy)
-                time.sleep(tab_sync)
-                mouse_move(sx, sy)  # 同じ位置に再送信して確実に同期
-                time.sleep(tab_sync)
+
+                if last_end_x is not None and not cfg.get('use_tab', True):
+                    # 3Dモード: 前の終点から滑らかに移動 (視点の瞬間移動を防ぐ)
+                    smooth_move(last_end_x, last_end_y, sx, sy,
+                                duration=0.3, steps=30)
+                    time.sleep(0.05)
+                else:
+                    # Tabモードまたは最初のストローク: ダブルムーブで同期
+                    tab_sync = cfg.get('tab_sync_delay', 0.15)
+                    mouse_move(sx, sy)
+                    time.sleep(tab_sync)
+                    mouse_move(sx, sy)
+                    time.sleep(tab_sync)
 
                 # マウスダウン (位置確定後にクリック)
                 mouse_down()
@@ -334,6 +356,10 @@ class AutoDrawer:
                     time.sleep(base_delay)
 
                 mouse_up()
+
+                # ストロークの終点を記録 (次の滑らか移動に使用)
+                last_pt = points[-1]
+                last_end_x, last_end_y = map_point(last_pt['x'], last_pt['y'])
 
                 # ストローク間の待機
                 # ダブルクリック判定回避: 最低 DOUBLE_CLICK_GUARD 秒空ける
