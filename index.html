@@ -104,6 +104,7 @@ html,body{
   <button id="resetViewBtn">表示リセット</button>
   <div class="sep"></div>
   <button id="exportBtn" style="background:#0a7e3f">保存</button>
+  <button id="importBtn" style="background:#0a5e8f">読込</button>
 </div>
 
 <div class="canvas-container">
@@ -112,6 +113,7 @@ html,body{
 </div>
 
 <input type="file" id="refFileInput" accept="image/*">
+<input type="file" id="jsonFileInput" accept=".json,application/json" style="display:none">
 
 <div class="info">
   <span id="infoText">0 ストローク | 100% | 0°</span>
@@ -607,6 +609,69 @@ document.getElementById('exportBtn').addEventListener('click', () => {
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
+});
+
+// --- Import ---
+const jsonFileInput = document.getElementById('jsonFileInput');
+document.getElementById('importBtn').addEventListener('click', () => { jsonFileInput.click(); });
+
+jsonFileInput.addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (ev) => {
+    try {
+      const data = JSON.parse(ev.target.result);
+      if (!data.strokes || !Array.isArray(data.strokes)) {
+        alert('無効なデータ: strokes が見つかりません'); return;
+      }
+      // 既存データがあれば確認
+      if (strokes.length > 0 && !confirm('現在の描画を置き換えますか？\n（キャンセルで追加読み込み）')) {
+        // 追加モード: 既存ストロークの後に追加
+        const loaded = data.strokes.map(s => ({
+          points: s.points.map(p => ({ x: p.x, y: p.y, t: p.t || 0 })),
+          width: s.width || 3
+        }));
+        strokes.push(...loaded);
+      } else {
+        // 置き換えモード
+        strokes.length = 0;
+        for (const s of data.strokes) {
+          strokes.push({
+            points: s.points.map(p => ({ x: p.x, y: p.y, t: p.t || 0 })),
+            width: s.width || 3
+          });
+        }
+      }
+      // ビューを描画全体にフィット
+      if (strokes.length > 0) {
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        for (const s of strokes) {
+          for (const p of s.points) {
+            minX = Math.min(minX, p.x); minY = Math.min(minY, p.y);
+            maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y);
+          }
+        }
+        const dw = maxX - minX, dh = maxY - minY;
+        if (dw > 0 && dh > 0) {
+          const pad = 0.1; // 10% margin
+          const fitScale = Math.min(canvasW / (dw * (1 + pad * 2)), canvasH / (dh * (1 + pad * 2)));
+          viewScale = fitScale;
+          viewRotation = 0;
+          const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+          viewPanX = canvasW / 2 - cx * viewScale;
+          viewPanY = canvasH / 2 - cy * viewScale;
+        }
+      }
+      drawRefImage();
+      redraw();
+      updateInfo();
+    } catch (err) {
+      alert('JSON読み込みエラー: ' + err.message);
+    }
+  };
+  reader.readAsText(file);
+  jsonFileInput.value = '';
 });
 
 document.addEventListener('keydown', (e) => {
