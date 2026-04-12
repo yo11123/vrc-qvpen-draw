@@ -105,6 +105,8 @@ html,body{
   <div class="sep"></div>
   <button id="exportBtn" style="background:#0a7e3f">保存</button>
   <button id="importBtn" style="background:#0a5e8f">読込</button>
+  <div class="sep"></div>
+  <button id="pencilOnlyBtn" class="active">Pencilのみ</button>
 </div>
 
 <div class="canvas-container">
@@ -143,6 +145,7 @@ let isDrawing = false;
 let eraserMode = false;
 let smoothX = 0, smoothY = 0;
 let refImage = null;
+let pencilOnly = true; // Apple Pencilのみモード (パームリジェクション)
 let refOpacityValue = 0.3;
 
 // --- View transform (zoom, pan, rotate) ---
@@ -402,6 +405,8 @@ canvas.addEventListener('touchstart', (e) => {
     return;
   }
   if (e.touches.length === 1 && !isPinching) {
+    // パームリジェクション: Pencilのみモード時は指タッチを無視
+    if (pencilOnly && e.touches[0].touchType !== 'stylus') return;
     if (eraserMode) { handleEraserTap(e); return; }
     startStroke(e);
   }
@@ -552,6 +557,12 @@ eraserBtn.addEventListener('click', () => {
   eraserMode = !eraserMode;
   eraserBtn.classList.toggle('active', eraserMode);
   canvas.classList.toggle('eraser-mode', eraserMode);
+});
+
+const pencilOnlyBtn = document.getElementById('pencilOnlyBtn');
+pencilOnlyBtn.addEventListener('click', () => {
+  pencilOnly = !pencilOnly;
+  pencilOnlyBtn.classList.toggle('active', pencilOnly);
 });
 
 document.getElementById('clearBtn').addEventListener('click', () => {
