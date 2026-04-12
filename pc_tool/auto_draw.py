@@ -260,22 +260,9 @@ class AutoDrawer:
             offset_x = dst_x + (dst_w - src_w * scale) / 2
             offset_y = dst_y + (dst_h - src_h * scale) / 2
 
-            # Tab感度補正: VRChatのTabモードはマウス移動量に感度係数をかけるため
-            # 画面中央から外側に拡大して送信することで補正する
-            tab_sens = cfg.get('tab_sensitivity', 1.0)
-            use_tab = cfg.get('use_tab', True)
-            sw = user32.GetSystemMetrics(0)
-            sh = user32.GetSystemMetrics(1)
-            screen_cx = sw / 2
-            screen_cy = sh / 2
-
             def map_point(px, py):
                 sx = offset_x + (px - src_min_x) * scale
                 sy = offset_y + (py - src_min_y) * scale
-                # Tabモードの感度補正 (画面中央を基準に拡大)
-                if use_tab and tab_sens < 1.0:
-                    sx = screen_cx + (sx - screen_cx) / tab_sens
-                    sy = screen_cy + (sy - screen_cy) / tab_sens
                 return int(sx), int(sy)
 
             total = data.stroke_count
@@ -292,11 +279,6 @@ class AutoDrawer:
 
             # Tabキーを押す (SendInput + スキャンコード)
             if cfg.get('use_tab', True):
-                # Tab前にカーソルを画面中央に移動
-                # VRChatはTab押下時のカーソル位置を基準にするため、
-                # 中央から開始しないと感度補正の基準点がずれる
-                mouse_move(int(screen_cx), int(screen_cy))
-                time.sleep(0.1)
                 key_down_tab()
                 time.sleep(1.0)
 
@@ -537,17 +519,7 @@ class App:
         self.use_tab_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(tab_frame, text="Tabキーモード（2D平面描画）", variable=self.use_tab_var).pack(side='left')
 
-        # Tab感度
-        tab_sens_frame = ttk.Frame(settings)
-        tab_sens_frame.pack(fill='x', pady=4)
-        ttk.Label(tab_sens_frame, text="Tab感度:").pack(side='left')
-        self.tab_sens_var = tk.DoubleVar(value=1.0)
-        self.tab_sens_scale = ttk.Scale(tab_sens_frame, from_=0.1, to=1.0, variable=self.tab_sens_var, orient='horizontal', length=200)
-        self.tab_sens_scale.pack(side='left', padx=8)
-        self.tab_sens_label = ttk.Label(tab_sens_frame, text="1.00")
-        self.tab_sens_label.pack(side='left')
-        self.tab_sens_scale.configure(command=lambda v: self.tab_sens_label.configure(text=f"{float(v):.2f}"))
-        ttk.Label(tab_sens_frame, text="(ずれる場合は下げる)", foreground='#888').pack(side='left', padx=4)
+
 
         # === 実行 ===
         exec_frame = ttk.Frame(main)
@@ -696,7 +668,6 @@ class App:
             'countdown': self.countdown_var.get(),
             'use_tab': self.use_tab_var.get(),
             'tab_sync_delay': 0.15,
-            'tab_sensitivity': self.tab_sens_var.get(),
         }
 
         self.start_btn.configure(state='disabled')
