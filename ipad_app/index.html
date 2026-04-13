@@ -99,6 +99,7 @@ html,body{
     <input type="range" id="refOpacity" min="0" max="100" value="30">
     <span class="val" id="refOpacityVal">30%</span>
   </div>
+  <button id="refAdjustBtn" style="background:#7b2d8e">下絵調整</button>
   <button id="refClearBtn">下絵消去</button>
   <div class="sep"></div>
   <button id="resetViewBtn">表示リセット</button>
@@ -146,6 +147,16 @@ let eraserMode = false;
 let smoothX = 0, smoothY = 0;
 let refImage = null;
 let pencilOnly = true; // Apple Pencilのみモード (パームリジェクション)
+let refAdjustMode = false; // 下絵調整モード
+
+// 下絵の独立トランスフォーム (ワールド座標系)
+let refOffsetX = 0, refOffsetY = 0;
+let refExtraScale = 1.0;
+let refExtraRotation = 0;
+
+// 下絵調整中のドラッグ状態
+let refDragStartX = 0, refDragStartY = 0;
+let refDragging = false;
 let refOpacityValue = 0.3;
 
 // --- View transform (zoom, pan, rotate) ---
@@ -258,6 +269,8 @@ refFileInput.addEventListener('change', (e) => {
 
 document.getElementById('refClearBtn').addEventListener('click', () => {
   refImage = null;
+  refOffsetX = 0; refOffsetY = 0;
+  refExtraScale = 1.0; refExtraRotation = 0;
   refCtx.clearRect(0, 0, canvasW, canvasH);
 });
 
@@ -285,6 +298,15 @@ function drawRefImage() {
   refCtx.translate(viewPanX, viewPanY);
   refCtx.rotate(viewRotation);
   refCtx.scale(viewScale, viewScale);
+
+  // 下絵の独立トランスフォーム (画像の中心を基準に回転・拡縮)
+  const imgCx = drawX + drawW / 2 + refOffsetX;
+  const imgCy = drawY + drawH / 2 + refOffsetY;
+  refCtx.translate(imgCx, imgCy);
+  refCtx.rotate(refExtraRotation);
+  refCtx.scale(refExtraScale, refExtraScale);
+  refCtx.translate(-drawX - drawW / 2, -drawY - drawH / 2);
+
   refCtx.drawImage(refImage, drawX, drawY, drawW, drawH);
   refCtx.restore();
 }
@@ -390,6 +412,27 @@ function getTouchMid(e) {
 // --- Canvas events ---
 canvas.addEventListener('touchstart', (e) => {
   e.preventDefault();
+
+  if (refAdjustMode) {
+    // === 下絵調整モード ===
+    if (e.touches.length === 2) {
+      isPinching = true;
+      pinchStartDist = getTouchDist(e);
+      pinchStartAngle = getTouchAngle(e);
+      pinchStartScale = refExtraScale;
+      pinchStartRotation = refExtraRotation;
+      return;
+    }
+    if (e.touches.length === 1) {
+      refDragging = true;
+      const rect = canvas.getBoundingClientRect();
+      refDragStartX = e.touches[0].clientX - rect.left;
+      refDragStartY = e.touches[0].clientY - rect.top;
+    }
+    return;
+  }
+
+  // === 通常モード ===
   if (e.touches.length === 2) {
     if (isDrawing) { isDrawing = false; currentStroke = null; ctx.beginPath(); }
     isPinching = true;
@@ -414,6 +457,37 @@ canvas.addEventListener('touchstart', (e) => {
 
 canvas.addEventListener('touchmove', (e) => {
   e.preventDefault();
+
+  if (refAdjustMode) {
+    // === 下絵調整モード ===
+    if (isPinching && e.touches.length === 2) {
+      const dist = getTouchDist(e);
+      const angle = getTouchAngle(e);
+      refExtraScale = Math.min(Math.max(pinchStartScale * (dist / pinchStartDist), 0.05), 20);
+      refExtraRotation = pinchStartRotation + (angle - pinchStartAngle);
+      drawRefImage();
+      updateInfo();
+      return;
+    }
+    if (refDragging && e.touches.length === 1) {
+      const rect = canvas.getBoundingClientRect();
+      const sx = e.touches[0].clientX - rect.left;
+      const sy = e.touches[0].clientY - rect.top;
+      const dx = sx - refDragStartX;
+      const dy = sy - refDragStartY;
+      refDragStartX = sx;
+      refDragStartY = sy;
+      // スクリーン座標のデルタをワールド座標に変換
+      const cos = Math.cos(-viewRotation);
+      const sin = Math.sin(-viewRotation);
+      refOffsetX += (dx * cos - dy * sin) / viewScale;
+      refOffsetY += (dx * sin + dy * cos) / viewScale;
+      drawRefImage();
+    }
+    return;
+  }
+
+  // === 通常モード ===
   if (isPinching && e.touches.length === 2) {
     const dist = getTouchDist(e);
     const angle = getTouchAngle(e);
@@ -453,6 +527,11 @@ canvas.addEventListener('touchmove', (e) => {
 
 canvas.addEventListener('touchend', (e) => {
   e.preventDefault();
+  if (refAdjustMode) {
+    if (e.touches.length < 2) isPinching = false;
+    if (e.touches.length === 0) refDragging = false;
+    return;
+  }
   if (isPinching) {
     if (e.touches.length < 2) isPinching = false;
     return;
@@ -462,7 +541,8 @@ canvas.addEventListener('touchend', (e) => {
 
 canvas.addEventListener('touchcancel', (e) => {
   isPinching = false;
-  endStroke(e);
+  refDragging = false;
+  if (!refAdjustMode) endStroke(e);
 }, { passive: false });
 
 // Mouse events (PC)
@@ -557,6 +637,13 @@ eraserBtn.addEventListener('click', () => {
   eraserMode = !eraserMode;
   eraserBtn.classList.toggle('active', eraserMode);
   canvas.classList.toggle('eraser-mode', eraserMode);
+});
+
+const refAdjustBtn = document.getElementById('refAdjustBtn');
+refAdjustBtn.addEventListener('click', () => {
+  refAdjustMode = !refAdjustMode;
+  refAdjustBtn.classList.toggle('active', refAdjustMode);
+  canvas.style.cursor = refAdjustMode ? 'move' : (eraserMode ? 'pointer' : 'crosshair');
 });
 
 const pencilOnlyBtn = document.getElementById('pencilOnlyBtn');
