@@ -106,6 +106,67 @@ def smooth_move(from_x, from_y, to_x, to_y, duration=0.3, steps=30):
         mouse_move(int(x), int(y))
         time.sleep(duration / steps)
 
+def mouse_move_relative(dx, dy):
+    """相対移動 (QvPenのInput.GetAxis 'Mouse X/Y' 用)"""
+    if dx == 0 and dy == 0:
+        return
+    inp = INPUT()
+    inp.type = INPUT_MOUSE
+    inp.u.mi.dx = int(dx)
+    inp.u.mi.dy = int(dy)
+    inp.u.mi.dwFlags = MOUSEEVENTF_MOVE  # 絶対座標なし = 相対移動
+    _send_inputs(inp)
+
+# Tabモード用の仮想カーソル位置 (ストローク開始時は画面中央)
+_tab_virtual_x = 0.0
+_tab_virtual_y = 0.0
+# 相対デルタの端数を蓄積 (int丸めによる累積誤差防止)
+_tab_delta_residual_x = 0.0
+_tab_delta_residual_y = 0.0
+
+def tab_reset_virtual(cx, cy):
+    """Tabモード仮想カーソルをリセット (Tab押下時に画面中央にする)"""
+    global _tab_virtual_x, _tab_virtual_y
+    global _tab_delta_residual_x, _tab_delta_residual_y
+    _tab_virtual_x = cx
+    _tab_virtual_y = cy
+    _tab_delta_residual_x = 0.0
+    _tab_delta_residual_y = 0.0
+
+def tab_move_to(target_x, target_y, tab_scale=1.0, max_step=8, step_interval=0.008):
+    """Tabモード: 相対デルタで仮想カーソルを目標位置へ移動。
+    QvPenは Input.GetAxis('Mouse X/Y') * sensitivity * deltaTime を積分するため、
+    デルタを複数フレームに分散して送る。"""
+    global _tab_virtual_x, _tab_virtual_y
+    global _tab_delta_residual_x, _tab_delta_residual_y
+
+    dx_total = (target_x - _tab_virtual_x) / tab_scale
+    dy_total = (target_y - _tab_virtual_y) / tab_scale
+
+    distance = max(abs(dx_total), abs(dy_total))
+    if distance < 0.5:
+        _tab_virtual_x = target_x
+        _tab_virtual_y = target_y
+        return
+
+    n_steps = max(1, int(distance / max_step))
+    step_dx = dx_total / n_steps
+    step_dy = dy_total / n_steps
+
+    for _ in range(n_steps):
+        # 端数を蓄積してint化で失われる分を補正
+        _tab_delta_residual_x += step_dx
+        _tab_delta_residual_y += step_dy
+        send_dx = int(_tab_delta_residual_x)
+        send_dy = int(_tab_delta_residual_y)
+        _tab_delta_residual_x -= send_dx
+        _tab_delta_residual_y -= send_dy
+        mouse_move_relative(send_dx, send_dy)
+        time.sleep(step_interval)
+
+    _tab_virtual_x = target_x
+    _tab_virtual_y = target_y
+
 def mouse_down():
     """左クリック押下"""
     inp = INPUT()
@@ -288,10 +349,18 @@ class AutoDrawer:
             # 描画開始フラグ — ここからキー停止が有効になる
             self.drawing = True
 
+            # Tabモード用スケール (キャリブレーション係数)
+            tab_scale = cfg.get('tab_scale', 1.0)
+
             # Tabキーを押す (SendInput + スキャンコード)
             if cfg.get('use_tab', True):
                 key_down_tab()
                 time.sleep(1.0)
+                # QvPenはTab押下時に _wh = 0 にリセットされ、
+                # 仮想ペン位置が画面中央に相当する
+                sw_ = user32.GetSystemMetrics(0)
+                sh_ = user32.GetSystemMetrics(1)
+                tab_reset_virtual(sw_ / 2, sh_ / 2)
 
             # 前のストローク終点を追跡 (滑らか移動用)
             last_end_x, last_end_y = None, None
@@ -315,20 +384,22 @@ class AutoDrawer:
                 # 最初の点に移動
                 sx, sy = map_point(points[0]['x'], points[0]['y'])
 
-                if last_end_x is not None and not cfg.get('use_tab', True):
+                if cfg.get('use_tab', True):
+                    # Tabモード: 相対デルタで仮想カーソルを移動
+                    # (QvPenは Input.GetAxis のデルタを積分しているため)
+                    tab_move_to(sx, sy, tab_scale=tab_scale)
+                    time.sleep(0.1)
+                elif last_end_x is not None:
                     # 3Dモード: 前の終点から滑らかに移動 (視点の瞬間移動を防ぐ)
                     smooth_move(last_end_x, last_end_y, sx, sy,
                                 duration=0.3, steps=30)
                     time.sleep(0.05)
                 else:
-                    # Tabモードまたは最初のストローク: ダブルムーブで同期
-                    tab_sync = cfg.get('tab_sync_delay', 0.15)
+                    # 3Dモード最初のストローク: 絶対座標で移動
                     mouse_move(sx, sy)
-                    time.sleep(tab_sync)
-                    mouse_move(sx, sy)
-                    time.sleep(tab_sync)
+                    time.sleep(0.15)
 
-                # マウスダウン (位置確定後にクリック)
+                # マウスダウン
                 mouse_down()
                 time.sleep(0.05)
 
@@ -338,8 +409,11 @@ class AutoDrawer:
                         break
 
                     px, py = map_point(points[i]['x'], points[i]['y'])
-                    mouse_move(px, py)
-                    time.sleep(base_delay)
+                    if cfg.get('use_tab', True):
+                        tab_move_to(px, py, tab_scale=tab_scale)
+                    else:
+                        mouse_move(px, py)
+                        time.sleep(base_delay)
 
                 mouse_up()
 
@@ -523,6 +597,18 @@ class App:
         self.use_tab_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(tab_frame, text="Tabキーモード（2D平面描画）", variable=self.use_tab_var).pack(side='left')
 
+        # Tab スケール (QvPenのsensitivityに合わせてキャリブレーション)
+        tab_scale_frame = ttk.Frame(settings)
+        tab_scale_frame.pack(fill='x', pady=4)
+        ttk.Label(tab_scale_frame, text="Tabスケール:").pack(side='left')
+        self.tab_scale_var = tk.DoubleVar(value=1.0)
+        self.tab_scale_scale = ttk.Scale(tab_scale_frame, from_=0.1, to=10.0, variable=self.tab_scale_var, orient='horizontal', length=200)
+        self.tab_scale_scale.pack(side='left', padx=8)
+        self.tab_scale_label = ttk.Label(tab_scale_frame, text="1.00")
+        self.tab_scale_label.pack(side='left')
+        self.tab_scale_scale.configure(command=lambda v: self.tab_scale_label.configure(text=f"{float(v):.2f}"))
+        ttk.Label(tab_scale_frame, text="(小さすぎる場合は上げる)", foreground='#888').pack(side='left', padx=4)
+
 
 
         # === 実行 ===
@@ -672,6 +758,7 @@ class App:
             'countdown': self.countdown_var.get(),
             'use_tab': self.use_tab_var.get(),
             'tab_sync_delay': 0.15,
+            'tab_scale': self.tab_scale_var.get(),
         }
 
         self.start_btn.configure(state='disabled')
