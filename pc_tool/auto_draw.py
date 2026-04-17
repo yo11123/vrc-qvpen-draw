@@ -133,15 +133,15 @@ def tab_reset_virtual(cx, cy):
     _tab_delta_residual_x = 0.0
     _tab_delta_residual_y = 0.0
 
-def tab_move_to(target_x, target_y, tab_scale=1.0, max_step=8, step_interval=0.008):
+def tab_move_to(target_x, target_y, tab_scale_x=1.0, tab_scale_y=1.0, max_step=8, step_interval=0.008):
     """Tabモード: 相対デルタで仮想カーソルを目標位置へ移動。
     QvPenは Input.GetAxis('Mouse X/Y') * sensitivity * deltaTime を積分するため、
-    デルタを複数フレームに分散して送る。"""
+    デルタを複数フレームに分散して送る。X/Y別々にスケール補正可能。"""
     global _tab_virtual_x, _tab_virtual_y
     global _tab_delta_residual_x, _tab_delta_residual_y
 
-    dx_total = (target_x - _tab_virtual_x) / tab_scale
-    dy_total = (target_y - _tab_virtual_y) / tab_scale
+    dx_total = (target_x - _tab_virtual_x) / tab_scale_x
+    dy_total = (target_y - _tab_virtual_y) / tab_scale_y
 
     distance = max(abs(dx_total), abs(dy_total))
     if distance < 0.5:
@@ -350,7 +350,8 @@ class AutoDrawer:
             self.drawing = True
 
             # Tabモード用スケール (キャリブレーション係数)
-            tab_scale = cfg.get('tab_scale', 1.0)
+            tab_scale_x = cfg.get('tab_scale_x', 1.0)
+            tab_scale_y = cfg.get('tab_scale_y', 1.0)
 
             # Tabキーを押す (SendInput + スキャンコード)
             if cfg.get('use_tab', True):
@@ -387,7 +388,7 @@ class AutoDrawer:
                 if cfg.get('use_tab', True):
                     # Tabモード: 相対デルタで仮想カーソルを移動
                     # (QvPenは Input.GetAxis のデルタを積分しているため)
-                    tab_move_to(sx, sy, tab_scale=tab_scale)
+                    tab_move_to(sx, sy, tab_scale_x=tab_scale_x, tab_scale_y=tab_scale_y)
                     time.sleep(0.1)
                 elif last_end_x is not None:
                     # 3Dモード: 前の終点から滑らかに移動 (視点の瞬間移動を防ぐ)
@@ -410,7 +411,7 @@ class AutoDrawer:
 
                     px, py = map_point(points[i]['x'], points[i]['y'])
                     if cfg.get('use_tab', True):
-                        tab_move_to(px, py, tab_scale=tab_scale)
+                        tab_move_to(px, py, tab_scale_x=tab_scale_x, tab_scale_y=tab_scale_y)
                     else:
                         mouse_move(px, py)
                         time.sleep(base_delay)
@@ -609,22 +610,39 @@ class App:
         self.use_tab_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(tab_frame, text="Tabキーモード（2D平面描画）", variable=self.use_tab_var).pack(side='left')
 
-        # Tab スケール (QvPenのsensitivityに合わせてキャリブレーション)
-        tab_scale_frame = ttk.Frame(settings)
-        tab_scale_frame.pack(fill='x', pady=4)
-        ttk.Label(tab_scale_frame, text="Tabスケール:").pack(side='left')
-        self.tab_scale_var = tk.DoubleVar(value=1.0)
-        self.tab_scale_scale = ttk.Scale(tab_scale_frame, from_=0.1, to=10.0, variable=self.tab_scale_var, orient='horizontal', length=150)
-        self.tab_scale_scale.pack(side='left', padx=8)
-        # 数値を直接入力できるEntry (スライダーと連動)
-        self.tab_scale_entry = ttk.Entry(tab_scale_frame, textvariable=self.tab_scale_var, width=6)
-        self.tab_scale_entry.pack(side='left', padx=4)
+        # Tab スケール X (QvPenのMouse X感度を補正)
+        tab_scale_x_frame = ttk.Frame(settings)
+        tab_scale_x_frame.pack(fill='x', pady=4)
+        ttk.Label(tab_scale_x_frame, text="Tabスケール X:").pack(side='left')
+        self.tab_scale_x_var = tk.DoubleVar(value=1.0)
+        self.tab_scale_x_scale = ttk.Scale(tab_scale_x_frame, from_=0.1, to=10.0,
+                                            variable=self.tab_scale_x_var,
+                                            orient='horizontal', length=150)
+        self.tab_scale_x_scale.pack(side='left', padx=8)
+        self.tab_scale_x_entry = ttk.Entry(tab_scale_x_frame,
+                                            textvariable=self.tab_scale_x_var, width=7)
+        self.tab_scale_x_entry.pack(side='left', padx=4)
+        ttk.Label(tab_scale_x_frame, text="(左右のずれを調整)", foreground='#888').pack(side='left', padx=4)
 
-        # Tabストローク間リセット (QvPenのクランプ蓄積を防ぐ)
+        # Tab スケール Y
+        tab_scale_y_frame = ttk.Frame(settings)
+        tab_scale_y_frame.pack(fill='x', pady=4)
+        ttk.Label(tab_scale_y_frame, text="Tabスケール Y:").pack(side='left')
+        self.tab_scale_y_var = tk.DoubleVar(value=1.0)
+        self.tab_scale_y_scale = ttk.Scale(tab_scale_y_frame, from_=0.1, to=10.0,
+                                            variable=self.tab_scale_y_var,
+                                            orient='horizontal', length=150)
+        self.tab_scale_y_scale.pack(side='left', padx=8)
+        self.tab_scale_y_entry = ttk.Entry(tab_scale_y_frame,
+                                            textvariable=self.tab_scale_y_var, width=7)
+        self.tab_scale_y_entry.pack(side='left', padx=4)
+        ttk.Label(tab_scale_y_frame, text="(上下のずれを調整)", foreground='#888').pack(side='left', padx=4)
+
+        # Tabストローク間リセット (QvPenの累積誤差を防ぐ)
         tab_reset_frame = ttk.Frame(settings)
         tab_reset_frame.pack(fill='x', pady=4)
         self.tab_reset_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(tab_reset_frame, text="ストローク間でTabをリセット（比率ズレ対策）",
+        ttk.Checkbutton(tab_reset_frame, text="ストローク間でTabをリセット（累積誤差対策）",
                         variable=self.tab_reset_var).pack(side='left')
 
 
@@ -776,7 +794,8 @@ class App:
             'countdown': self.countdown_var.get(),
             'use_tab': self.use_tab_var.get(),
             'tab_sync_delay': 0.15,
-            'tab_scale': self.tab_scale_var.get(),
+            'tab_scale_x': self.tab_scale_x_var.get(),
+            'tab_scale_y': self.tab_scale_y_var.get(),
             'tab_reset_between_strokes': self.tab_reset_var.get(),
         }
 
