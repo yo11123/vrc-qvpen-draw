@@ -427,6 +427,18 @@ class AutoDrawer:
                 if idx < total - 1:
                     time.sleep(wait)
 
+                    # Tabモードでリセットオプション有効なら、Tabを一瞬離して再押下
+                    # これでQvPenの _wh が0にリセットされ、累積誤差が解消される
+                    if cfg.get('use_tab', True) and cfg.get('tab_reset_between_strokes', True):
+                        key_up_tab()
+                        time.sleep(0.08)  # VRChatが確実にTab解放を認識するまで
+                        key_down_tab()
+                        time.sleep(0.5)   # QvPenが EnterScreenMode() を完了するまで
+                        # 仮想カーソルもリセット
+                        sw_ = user32.GetSystemMetrics(0)
+                        sh_ = user32.GetSystemMetrics(1)
+                        tab_reset_virtual(sw_ / 2, sh_ / 2)
+
             # Tabキーを離す
             if cfg.get('use_tab', True):
                 key_up_tab()
@@ -602,12 +614,18 @@ class App:
         tab_scale_frame.pack(fill='x', pady=4)
         ttk.Label(tab_scale_frame, text="Tabスケール:").pack(side='left')
         self.tab_scale_var = tk.DoubleVar(value=1.0)
-        self.tab_scale_scale = ttk.Scale(tab_scale_frame, from_=0.1, to=10.0, variable=self.tab_scale_var, orient='horizontal', length=200)
+        self.tab_scale_scale = ttk.Scale(tab_scale_frame, from_=0.1, to=10.0, variable=self.tab_scale_var, orient='horizontal', length=150)
         self.tab_scale_scale.pack(side='left', padx=8)
-        self.tab_scale_label = ttk.Label(tab_scale_frame, text="1.00")
-        self.tab_scale_label.pack(side='left')
-        self.tab_scale_scale.configure(command=lambda v: self.tab_scale_label.configure(text=f"{float(v):.2f}"))
-        ttk.Label(tab_scale_frame, text="(小さすぎる場合は上げる)", foreground='#888').pack(side='left', padx=4)
+        # 数値を直接入力できるEntry (スライダーと連動)
+        self.tab_scale_entry = ttk.Entry(tab_scale_frame, textvariable=self.tab_scale_var, width=6)
+        self.tab_scale_entry.pack(side='left', padx=4)
+
+        # Tabストローク間リセット (QvPenのクランプ蓄積を防ぐ)
+        tab_reset_frame = ttk.Frame(settings)
+        tab_reset_frame.pack(fill='x', pady=4)
+        self.tab_reset_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(tab_reset_frame, text="ストローク間でTabをリセット（比率ズレ対策）",
+                        variable=self.tab_reset_var).pack(side='left')
 
 
 
@@ -759,6 +777,7 @@ class App:
             'use_tab': self.use_tab_var.get(),
             'tab_sync_delay': 0.15,
             'tab_scale': self.tab_scale_var.get(),
+            'tab_reset_between_strokes': self.tab_reset_var.get(),
         }
 
         self.start_btn.configure(state='disabled')
