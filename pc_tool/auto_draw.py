@@ -474,8 +474,9 @@ class App:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("VRC QVPen 自動描画ツール")
-        self.root.geometry("520x700")
-        self.root.resizable(False, False)
+        self.root.geometry("620x900")
+        self.root.resizable(True, True)
+        self.root.minsize(520, 700)
         self.root.configure(bg='#1a1a2e')
 
         self.drawing_data = None
