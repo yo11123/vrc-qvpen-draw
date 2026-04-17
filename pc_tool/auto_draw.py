@@ -332,9 +332,23 @@ class AutoDrawer:
                 offset_x = dst_x + (dst_w - src_w * scale) / 2
                 offset_y = dst_y + (dst_h - src_h * scale) / 2
 
+            # 3Dモード用のX/Y補正 (VRChatのMouse X/Y感度の違いを補う)
+            # すべての座標にこの関数を通すので、同じ入力には同じ出力を返し、
+            # 線と線の繋がり点は絶対にずれない
+            scale_3d_x = cfg.get('scale_3d_x', 1.0)
+            scale_3d_y = cfg.get('scale_3d_y', 1.0)
+            sw_for_map = user32.GetSystemMetrics(0)
+            sh_for_map = user32.GetSystemMetrics(1)
+            screen_cx_map = sw_for_map / 2
+            screen_cy_map = sh_for_map / 2
+
             def map_point(px, py):
                 sx = offset_x + (px - src_min_x) * scale
                 sy = offset_y + (py - src_min_y) * scale
+                # 3Dモードのみ軸補正を適用 (Tabモードは tab_scale_x/y で別途補正)
+                if not use_tab:
+                    sx = screen_cx_map + (sx - screen_cx_map) / scale_3d_x
+                    sy = screen_cy_map + (sy - screen_cy_map) / scale_3d_y
                 return int(sx), int(sy)
 
             total = data.stroke_count
@@ -662,6 +676,32 @@ class App:
         ttk.Label(tab_adv_frame, text="(VRChatのFPSに応じて調整: 90fps→11ms, 60fps→17ms)",
                   foreground='#888').pack(side='left', padx=4)
 
+        # 3Dモード用 X/Y補正 (VRChatのMouse X/Y感度の違いを補正)
+        ttk.Label(settings, text="── 3Dモード補正（Tab手動押しで描画する場合） ──",
+                  foreground='#aaa').pack(anchor='w', pady=(8, 2))
+
+        scale3d_x_frame = ttk.Frame(settings)
+        scale3d_x_frame.pack(fill='x', pady=4)
+        ttk.Label(scale3d_x_frame, text="3Dスケール X:").pack(side='left')
+        self.scale_3d_x_var = tk.DoubleVar(value=1.0)
+        self.scale_3d_x_scale = ttk.Scale(scale3d_x_frame, from_=0.3, to=3.0,
+                                           variable=self.scale_3d_x_var,
+                                           orient='horizontal', length=150)
+        self.scale_3d_x_scale.pack(side='left', padx=8)
+        ttk.Entry(scale3d_x_frame, textvariable=self.scale_3d_x_var, width=7).pack(side='left', padx=4)
+        ttk.Label(scale3d_x_frame, text="(左右の縮みを補正)", foreground='#888').pack(side='left', padx=4)
+
+        scale3d_y_frame = ttk.Frame(settings)
+        scale3d_y_frame.pack(fill='x', pady=4)
+        ttk.Label(scale3d_y_frame, text="3Dスケール Y:").pack(side='left')
+        self.scale_3d_y_var = tk.DoubleVar(value=1.0)
+        self.scale_3d_y_scale = ttk.Scale(scale3d_y_frame, from_=0.3, to=3.0,
+                                           variable=self.scale_3d_y_var,
+                                           orient='horizontal', length=150)
+        self.scale_3d_y_scale.pack(side='left', padx=8)
+        ttk.Entry(scale3d_y_frame, textvariable=self.scale_3d_y_var, width=7).pack(side='left', padx=4)
+        ttk.Label(scale3d_y_frame, text="(上下の縮みを補正)", foreground='#888').pack(side='left', padx=4)
+
 
 
         # === 実行 ===
@@ -816,6 +856,8 @@ class App:
             'tab_reset_between_strokes': self.tab_reset_var.get(),
             'tab_step_size': self.tab_step_size_var.get(),
             'tab_step_interval': self.tab_step_interval_var.get() / 1000.0,
+            'scale_3d_x': self.scale_3d_x_var.get(),
+            'scale_3d_y': self.scale_3d_y_var.get(),
         }
 
         self.start_btn.configure(state='disabled')
