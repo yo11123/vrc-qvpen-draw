@@ -352,6 +352,8 @@ class AutoDrawer:
             # Tabモード用スケール (キャリブレーション係数)
             tab_scale_x = cfg.get('tab_scale_x', 1.0)
             tab_scale_y = cfg.get('tab_scale_y', 1.0)
+            tab_step_size = max(1, cfg.get('tab_step_size', 8))
+            tab_step_interval = max(0.001, cfg.get('tab_step_interval', 0.012))
 
             # Tabキーを押す (SendInput + スキャンコード)
             if cfg.get('use_tab', True):
@@ -388,7 +390,8 @@ class AutoDrawer:
                 if cfg.get('use_tab', True):
                     # Tabモード: 相対デルタで仮想カーソルを移動
                     # (QvPenは Input.GetAxis のデルタを積分しているため)
-                    tab_move_to(sx, sy, tab_scale_x=tab_scale_x, tab_scale_y=tab_scale_y)
+                    tab_move_to(sx, sy, tab_scale_x=tab_scale_x, tab_scale_y=tab_scale_y,
+                                max_step=tab_step_size, step_interval=tab_step_interval)
                     time.sleep(0.1)
                 elif last_end_x is not None:
                     # 3Dモード: 前の終点から滑らかに移動 (視点の瞬間移動を防ぐ)
@@ -411,7 +414,8 @@ class AutoDrawer:
 
                     px, py = map_point(points[i]['x'], points[i]['y'])
                     if cfg.get('use_tab', True):
-                        tab_move_to(px, py, tab_scale_x=tab_scale_x, tab_scale_y=tab_scale_y)
+                        tab_move_to(px, py, tab_scale_x=tab_scale_x, tab_scale_y=tab_scale_y,
+                                    max_step=tab_step_size, step_interval=tab_step_interval)
                     else:
                         mouse_move(px, py)
                         time.sleep(base_delay)
@@ -432,9 +436,9 @@ class AutoDrawer:
                     # これでQvPenの _wh が0にリセットされ、累積誤差が解消される
                     if cfg.get('use_tab', True) and cfg.get('tab_reset_between_strokes', True):
                         key_up_tab()
-                        time.sleep(0.08)  # VRChatが確実にTab解放を認識するまで
+                        time.sleep(0.2)   # VRChatが確実にTab解放を認識するまで
                         key_down_tab()
-                        time.sleep(0.5)   # QvPenが EnterScreenMode() を完了するまで
+                        time.sleep(0.7)   # QvPenが EnterScreenMode() を完了するまで
                         # 仮想カーソルもリセット
                         sw_ = user32.GetSystemMetrics(0)
                         sh_ = user32.GetSystemMetrics(1)
@@ -645,6 +649,18 @@ class App:
         ttk.Checkbutton(tab_reset_frame, text="ストローク間でTabをリセット（累積誤差対策）",
                         variable=self.tab_reset_var).pack(side='left')
 
+        # Tab詳細設定 (ステップサイズと間隔)
+        tab_adv_frame = ttk.Frame(settings)
+        tab_adv_frame.pack(fill='x', pady=4)
+        ttk.Label(tab_adv_frame, text="ステップサイズ(px):").pack(side='left')
+        self.tab_step_size_var = tk.IntVar(value=8)
+        ttk.Entry(tab_adv_frame, textvariable=self.tab_step_size_var, width=5).pack(side='left', padx=4)
+        ttk.Label(tab_adv_frame, text="  間隔(ms):").pack(side='left')
+        self.tab_step_interval_var = tk.IntVar(value=12)
+        ttk.Entry(tab_adv_frame, textvariable=self.tab_step_interval_var, width=5).pack(side='left', padx=4)
+        ttk.Label(tab_adv_frame, text="(VRChatのFPSに応じて調整: 90fps→11ms, 60fps→17ms)",
+                  foreground='#888').pack(side='left', padx=4)
+
 
 
         # === 実行 ===
@@ -797,6 +813,8 @@ class App:
             'tab_scale_x': self.tab_scale_x_var.get(),
             'tab_scale_y': self.tab_scale_y_var.get(),
             'tab_reset_between_strokes': self.tab_reset_var.get(),
+            'tab_step_size': self.tab_step_size_var.get(),
+            'tab_step_interval': self.tab_step_interval_var.get() / 1000.0,
         }
 
         self.start_btn.configure(state='disabled')
